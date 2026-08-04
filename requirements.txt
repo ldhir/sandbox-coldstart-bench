@@ -1,0 +1,14 @@
+# Requires Python 3.11+ (the SDKs don't ship wheels for 3.8).
+# Versions below are the ones this harness was verified against.
+#
+# On x86_64 macOS without a Rust toolchain, a transitive dep (cbor2) tries to
+# build from source and fails. Grab the prebuilt wheel first:
+#   pip install --only-binary=:all: cbor2
+# then install the rest normally.
+
+blaxel>=0.4.1
+modal>=1.5.0
+
+# optional
+matplotlib>=3.7      # charts (run.py works without it via --no-plot)
+python-dotenv>=1.0   # loads .env for API keys

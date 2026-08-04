@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# results/ holds the published reference run (charts + json), committed on purpose.
+# A local re-run overwrites them; that's expected. Nothing else to ignore there.
