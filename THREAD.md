@@ -12,7 +12,7 @@ Every "best AI sandbox" post lists Blaxel at ~25ms cold-start.
 I went looking for where that number came from. It's from Blaxel's own blog, and
 nobody re-measured it or reported the tail.
 
-So I did. Runnable benchmark, full distribution, network isolated. [link]
+So I did. Runnable benchmark, full distribution, network isolated. https://github.com/ldhir/sandbox-coldstart-bench
 
 **2/**
 The problem with most sandbox benchmarks: they measure your wifi.
@@ -65,4 +65,4 @@ ugly two-second outliers. Whatever they do for resume is consistent.
 It's all runnable. Clone, add a key (free tier, no card), `python run.py`. If
 your numbers don't match mine, open an issue.
 
-That's the point of shipping code instead of a screenshot. [link]
+That's the point of shipping code instead of a screenshot. https://github.com/ldhir/sandbox-coldstart-bench
