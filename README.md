@@ -1,37 +1,104 @@
-# sandbox-coldstart-bench
+# I measured Blaxel's cold-start. Does the 25ms hold up?
 
-A runnable cold-start benchmark for AI agent sandboxes. Measures Blaxel's
-resume-from-standby latency against Modal's create-fresh sandbox, and reports
-the full distribution (p50/p95/p99), not just a median.
+A runnable benchmark for Blaxel's resume-from-standby latency. It reports the
+percentiles that matter instead of a flattering average, and it pulls the network
+round trip out so you can see the real resume cost. Clone it and run it in about
+five minutes ([jump to setup](#run-it-yourself)).
 
-Most sandbox "comparisons" online are tables someone typed, citing a single
-number from a vendor blog. This one you clone and run. If the numbers don't
-reproduce on your machine, that's a bug you can open.
+Every "best AI sandbox" post lists Blaxel at around 25ms cold-start. E2B at 150,
+Daytona at 90, Blaxel the fast one. I kept seeing that number so I went to find
+where it came from. It's from Blaxel's own blog, and every comparison just
+repeats it. Nobody re-ran it, and nobody shows the tail, which for cold-start is
+the part that actually bites you.
 
-## Why this exists
+Short version: the 25ms is real, but it's a server-side number. From my laptop
+the cold-start is about 300ms. Break it apart and ~85ms of that is the actual
+resume. The rest is network you'd pay from anywhere. Here's the work.
 
-Blaxel markets ~25ms resume-from-standby. That number shows up in half the
-sandbox comparison posts on the internet, and every one of them traces back to
-the same Blaxel blog post. Nobody re-measured it, and nobody reports what the
-tail looks like. Cold-start reputations live in p95/p99, not the median, so
-that's the gap this fills.
+## How I measured it
 
-## Run it (about 5 minutes)
+The easy way to get this wrong is to measure your own wifi. My laptop to a
+sandbox in Oregon is a round trip that can be bigger than the cold-start itself,
+so a raw number tells you about my ISP as much as about Blaxel. To get around
+that I time three things every trial:
+
+- **warm**: an exec on a sandbox that's already awake. One round trip plus a tiny
+  exec, no cold-start in it. That's my network baseline.
+- **reconnect**: the `get()` call that reattaches to a sandbox that fell asleep.
+- **cold_exec**: the first exec right after that reconnect.
+
+Reconnect plus cold_exec is the full cold-start a developer waits on. Cold_exec
+minus warm is the resume cost with the network stripped out. That last one is the
+number nobody publishes.
+
+30 trials, region `us-pdx-1`, from a laptop, trivial `echo` workload, blaxel SDK
+0.4.1.
+
+## The numbers
+
+| metric | p50 | p95 | p99 | min | max |
+|--------|-----|-----|-----|-----|-----|
+| cold (total) | 307 | 339 | 349 | 275 | 350 |
+| reconnect | 106 | 129 | 133 | 89 | 133 |
+| cold_exec | 199 | 216 | 239 | 156 | 247 |
+| warm (baseline) | 114 | 127 | 147 | 103 | 155 |
+
+All values in milliseconds.
+
+![where the cold start goes](results/decomposition.png)
+
+Reading the bar left to right, the ~306ms breaks down like this:
+
+- **106ms is the reconnect.** `get()` is basically one network hop. No resume
+  hiding in it, it's just the SDK making a call.
+- **114ms is the network baseline**, the same round trip the warm exec pays.
+  That's my distance to Oregon, not Blaxel.
+- **85ms is the real resume.** The first exec after reconnect costs about 85ms
+  more than a warm one. That's the asleep-to-awake cost with the network removed.
+
+## So does 25ms hold up?
+
+Yes and no, and the gap is the interesting part.
+
+The 25ms is believable as a server-side number, the microVM waking up inside
+their own network. My 85ms is that same event seen from outside, and it still
+includes whatever the first exec spends setting up, so the real engine number
+could be even lower. On that, Blaxel checks out.
+
+But no developer ever sees 25ms, because you're talking to the box over a
+network. From my laptop it's about 300ms, and that's two round trips plus the
+resume. In-region, where the round trip is a few ms instead of 110, I'd expect
+somewhere near 100ms, not 25, because you still pay a full reconnect and the
+resume still lands on the first exec.
+
+The tail is where Blaxel looks good. p99 is 349ms, only about 14% over the
+median. Nothing weird, no request that randomly takes two seconds. Whatever they
+do for resume is steady, and you can't see that in a single number.
+
+## What I'd actually tell a developer
+
+If your agent wakes a sandbox and runs code, plan for ~300ms from a remote
+client and ~100ms if you're colocated. Not 25. The 25ms is the engine, not the
+trip. That's not a knock, it's just the difference between a spec sheet and what
+your users feel, and honestly it's the kind of thing the docs could just say.
+
+## Run it yourself
 
 Needs Python 3.11+ (the SDKs don't ship 3.8 wheels).
 
 ```bash
-git clone <this-repo> && cd sandbox-coldstart-bench
+git clone https://github.com/ldhir/sandbox-coldstart-bench
+cd sandbox-coldstart-bench
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 # on x86_64 macOS without Rust, if cbor2 fails to build:
 #   pip install --only-binary=:all: cbor2   # then rerun the line above
 
 cp .env.example .env      # add your Blaxel key (free tier: $200, no card)
-python run.py             # 30 Blaxel trials, prints a table + writes charts
+python run.py             # 30 Blaxel trials, prints the table + writes charts
 ```
 
-Longer run, or add Modal as a create-fresh reference point:
+Longer run, or add a create-fresh platform as a reference point:
 
 ```bash
 python run.py --n 100                    # tighter tails
@@ -39,49 +106,35 @@ python run.py --platforms blaxel,modal   # also benchmark Modal (needs a Modal t
 python run.py --no-plot                  # skip charts (no matplotlib needed)
 ```
 
-## What it measures
+If your numbers don't match mine, open an issue. That's the point of shipping
+code instead of a screenshot.
 
-Blaxel's model is resume-from-standby, so the harness decomposes the
-developer-visible cold start into parts you can actually reason about:
-
-- **`reconnect`** = the `SandboxInstance.get()` call to reattach to a standby
-  sandbox. Basically one network round trip.
-- **`cold_exec`** = the first exec right after reconnecting.
-- **`cold`** = reconnect + cold_exec, the full thing a developer waits on.
-- **`warm`** = an exec on an already-live sandbox. One round trip plus a trivial
-  exec, no cold-start in it. This is the network baseline.
-- **resume penalty** = `cold_exec − warm`, the standby-resume cost with the
-  network subtracted out. This is the number the marketing 25ms can't show you.
-
-Modal is supported as a create-fresh reference point (`--platforms blaxel,modal`),
-timed under its own native model. Blaxel resumes a snapshot and Modal builds a
-container, so read a comparison as "time until I can run code," not "same thing,
-who wins." The default run is Blaxel only.
-
-## Output
+### Output
 
 - `results/results.json` — full summary plus raw samples
 - `results/decomposition.png` — where the cold start goes (network vs resume)
 - `results/cdf.png` — cold-start latency CDF
 - `results/percentiles.png` — p50/p95/p99 bars
 
+### Layout
+
+```
+run.py                   CLI entry point
+bench/blaxel_bench.py     Blaxel resume-from-standby harness (async)
+bench/modal_bench.py      Modal create-fresh harness (reference point)
+bench/stats.py            percentiles, no numpy needed
+bench/plot.py             CDF, percentile, and decomposition charts
+```
+
 ## Caveats
 
-- Raw numbers include your network RTT to each region. Run from a cloud box in
-  the platform's region if you want the machine-independent version; the
-  `overhead` column already subtracts most of it.
-- SDK APIs drift. The exact calls are documented at the top of each file in
-  `bench/`. Check them against current docs before trusting a run.
-- Default region is Blaxel `us-pdx-1`. Set `--region` to match where you are.
-
-See [WRITEUP.md](WRITEUP.md) for the full method, results, and what they mean.
-
-## Layout
-
-```
-run.py               CLI entry point
-bench/blaxel_bench.py  Blaxel resume-from-standby harness (async)
-bench/modal_bench.py   Modal create-fresh harness
-bench/stats.py         percentiles, no numpy needed
-bench/plot.py          CDF + percentile charts
-```
+- Measured from a laptop, so the raw number includes my round trip to
+  `us-pdx-1`. The breakdown subtracts it, which is why the 85ms resume is the
+  number to trust, not the 300ms.
+- That 85ms also includes whatever the first exec spends connecting to the
+  sandbox, so treat it as a ceiling on the real resume, not the exact figure.
+- This is Blaxel only. The harness also does a create-fresh platform as a
+  reference point with one flag (`--platforms blaxel,modal`), I just kept this
+  run focused on Blaxel's own number.
+- 30 trials, one region, one workload. Enough to see the shape, not a load test.
+  Bump `--n` for tighter tails.
